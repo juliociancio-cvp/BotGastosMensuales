@@ -9,7 +9,8 @@ REINTEGRO_TOPES = {
     "Combustible": 400000,
     "Tienda": 400000,
     "Bares": 400000,
-    "Pagopar": 400000
+    "Pagopar": 400000,
+    "Biggie": 400000
 }
 
 def load_data():
