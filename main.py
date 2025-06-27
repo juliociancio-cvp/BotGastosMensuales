@@ -3,7 +3,7 @@ import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-DATA_FILE = "/data/data.json"
+DATA_FILE = "data.json"
 REINTEGRO_TOPES = {
     "Supermercado": 400000,
     "Combustible": 400000,
@@ -62,3 +62,6 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subcat, amount = " ".join(context.args).split(":")
         update_data("Gastos", subcat.strip(), int(amount.strip()))
         await update.message.reply_text("Gasto registrado.")
+    except:
+        await update.message.reply_text("Formato incorrecto. Usa /gasto Subcategoria: Monto")
+
