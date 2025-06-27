@@ -4,6 +4,13 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 DATA_FILE = "data.json"
+REINTEGRO_TOPES = {
+    "Supermercado": 400000,
+    "Combustible": 400000,
+    "Tienda": 400000,
+    "Bares": 400000,
+    "Pagopar": 400000
+}
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -20,11 +27,24 @@ def update_data(category, subcategory, amount):
     if subcategory not in data[category]:
         data[category][subcategory] = 0
     data[category][subcategory] += amount
-    if category == "Ingresos" or category == "Reintegros":
+    if category == "Ingresos":
         data["ACTIVO"] += amount
     elif category == "Gastos":
         data["ACTIVO"] -= amount
     save_data(data)
+
+def update_reintegro(categoria, amount):
+    data = load_data()
+    if categoria not in REINTEGRO_TOPES:
+        return False, f"Categoría inválida. Usa una de estas: {', '.join(REINTEGRO_TOPES.keys())}"
+    if categoria not in data["Reintegros"]:
+        data["Reintegros"][categoria] = 0
+    if data["Reintegros"][categoria] + amount > REINTEGRO_TOPES[categoria]:
+        return False, f"Tope mensual excedido para {categoria}. Máximo permitido: 400000"
+    data["Reintegros"][categoria] += amount
+    data["ACTIVO"] += amount
+    save_data(data)
+    return True, "Reintegro registrado."
 
 async def ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -44,20 +64,23 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reintegro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subcat, amount = " ".join(context.args).split(":")
-        update_data("Reintegros", subcat.strip(), int(amount.strip()))
-        await update.message.reply_text("Reintegro registrado.")
+        categoria, amount = " ".join(context.args).split(":")
+        success, message = update_reintegro(categoria.strip(), int(amount.strip()))
+        await update.message.reply_text(message)
     except:
-        await update.message.reply_text("Formato incorrecto. Usa /reintegro Subcategoria: Monto")
+        await update.message.reply_text("Formato incorrecto. Usa /reintegro Categoria: Monto")
 
 async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     lines = [f"ACTIVO: {data['ACTIVO']}\n"]
-    for cat in ["Ingresos", "Gastos", "Reintegros"]:
+    for cat in ["Ingresos", "Gastos"]:
         lines.append(f"{cat}:")
         for subcat, amount in data[cat].items():
             lines.append(f"  {subcat}: {amount}")
         lines.append("")
+    lines.append("Reintegros:")
+    for categoria, amount in data["Reintegros"].items():
+        lines.append(f"  {categoria}: {amount}")
     await update.message.reply_text("\n".join(lines))
 
 if __name__ == "__main__":
