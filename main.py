@@ -63,5 +63,4 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_data("Gastos", subcat.strip(), int(amount.strip()))
         await update.message.reply_text("Gasto registrado.")
     except:
-        await update.message.reply_text("Formato incorrecto. Usa /gasto Subcategoria: Monto")
-
+        await update.message.reply_text("Formato incorrecto. Usa /gasto Subcategoria: Monto")
