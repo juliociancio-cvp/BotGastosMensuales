@@ -4,13 +4,6 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 DATA_FILE = "data.json"
-REINTEGRO_TOPES = {
-    "Supermercado": 400000,
-    "Combustible": 400000,
-    "Tienda": 400000,
-    "Bares": 400000,
-    "Pagopar": 400000
-}
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -33,22 +26,6 @@ def update_data(category, subcategory, amount):
         data["ACTIVO"] -= amount
     save_data(data)
 
-def update_reintegro(categoria, subcategoria, amount):
-    data = load_data()
-    if categoria not in data["Reintegros"]:
-        data["Reintegros"][categoria] = {}
-    if subcategoria not in data["Reintegros"][categoria]:
-        data["Reintegros"][categoria][subcategoria] = 0
-
-    total_categoria = sum(data["Reintegros"][categoria].values())
-    if total_categoria + amount > REINTEGRO_TOPES.get(categoria, 400000):
-        return False, f"Tope mensual excedido para {categoria}. Máximo permitido: 400000"
-
-    data["Reintegros"][categoria][subcategoria] += amount
-    data["ACTIVO"] += amount
-    save_data(data)
-    return True, "Reintegro registrado."
-
 async def ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         subcat, amount = " ".join(context.args).split(":")
@@ -64,3 +41,32 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Gasto registrado.")
     except:
         await update.message.reply_text("Formato incorrecto. Usa /gasto Subcategoria: Monto")
+
+async def reintegro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        subcat, amount = " ".join(context.args).split(":")
+        update_data("Reintegros", subcat.strip(), int(amount.strip()))
+        await update.message.reply_text("Reintegro registrado.")
+    except:
+        await update.message.reply_text("Formato incorrecto. Usa /reintegro Subcategoria: Monto")
+
+async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    lines = [f"ACTIVO: {data['ACTIVO']}\n"]
+    for cat in ["Ingresos", "Gastos", "Reintegros"]:
+        lines.append(f"{cat}:")
+        for subcat, amount in data[cat].items():
+            lines.append(f"  {subcat}: {amount}")
+        lines.append("")
+    await update.message.reply_text("\n".join(lines))
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    TOKEN = os.getenv("BOT_TOKEN")
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("ingreso", ingreso))
+    app.add_handler(CommandHandler("gasto", gasto))
+    app.add_handler(CommandHandler("reintegro", reintegro))
+    app.add_handler(CommandHandler("informe", informe))
+    app.run_polling()
