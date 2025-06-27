@@ -1,89 +1,114 @@
-import json
 import os
+import datetime
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-DATA_FILE = "data.json"
+# Google Sheets setup
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+CREDENTIALS_FILE = "/etc/secrets/gcp_credentials.json"  # Ruta del archivo secreto en Render
+SPREADSHEET_NAME = "GastosMensualesJC"
+
+# Categorías válidas para reintegros y su tope
 REINTEGRO_TOPES = {
     "Supermercado": 400000,
     "Combustible": 400000,
     "Tienda": 400000,
     "Bares": 400000,
-    "Pagopar": 400000,
-    "Biggie": 400000
+    "Pagopar": 400000
 }
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"ACTIVO": 0, "Ingresos": {}, "Gastos": {}, "Reintegros": {}}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+# Autenticación con Google Sheets
+def get_sheet():
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
+    client = gspread.authorize(creds)
+    sheet = client.open(SPREADSHEET_NAME).sheet1
+    return sheet
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+# Agregar una fila a la hoja
+def append_row(tipo, categoria, monto):
+    sheet = get_sheet()
+    fecha = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sheet.append_row([fecha, tipo, categoria, str(monto)])
 
-def update_data(category, subcategory, amount):
-    data = load_data()
-    if subcategory not in data[category]:
-        data[category][subcategory] = 0
-    data[category][subcategory] += amount
-    if category == "Ingresos":
-        data["ACTIVO"] += amount
-    elif category == "Gastos":
-        data["ACTIVO"] -= amount
-    save_data(data)
+# Calcular el ACTIVO y totales por categoría
+def generar_informe():
+    sheet = get_sheet()
+    rows = sheet.get_all_records()
+    activo = 0
+    resumen = {"Ingresos": {}, "Gastos": {}, "Reintegros": {}}
 
-def update_reintegro(categoria, amount):
-    data = load_data()
-    if categoria not in REINTEGRO_TOPES:
-        return False, f"Categoría inválida. Usa una de estas: {', '.join(REINTEGRO_TOPES.keys())}"
-    if categoria not in data["Reintegros"]:
-        data["Reintegros"][categoria] = 0
-    if data["Reintegros"][categoria] + amount > REINTEGRO_TOPES[categoria]:
-        return False, f"Tope mensual excedido para {categoria}. Máximo permitido: 400000"
-    data["Reintegros"][categoria] += amount
-    data["ACTIVO"] += amount
-    save_data(data)
-    return True, "Reintegro registrado."
+    for row in rows:
+        tipo = row["Tipo"]
+        categoria = row["Categoría"]
+        monto = int(row["Monto"])
+        if tipo == "Ingresos":
+            activo += monto
+        elif tipo == "Gastos":
+            activo -= monto
+        elif tipo == "Reintegros":
+            activo += monto
 
+        if categoria not in resumen[tipo]:
+            resumen[tipo][categoria] = 0
+        resumen[tipo][categoria] += monto
+
+    lines = [f"ACTIVO: {activo}\n"]
+    for tipo in ["Ingresos", "Gastos", "Reintegros"]:
+        lines.append(f"{tipo}:")
+        for cat, monto in resumen[tipo].items():
+            lines.append(f"  {cat}: {monto}")
+        lines.append("")
+    return "\n".join(lines)
+
+# Comandos del bot
 async def ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subcat, amount = " ".join(context.args).split(":")
-        update_data("Ingresos", subcat.strip(), int(amount.strip()))
+        categoria, monto = " ".join(context.args).split(":")
+        append_row("Ingresos", categoria.strip(), int(monto.strip()))
         await update.message.reply_text("Ingreso registrado.")
     except:
-        await update.message.reply_text("Formato incorrecto. Usa /ingreso Subcategoria: Monto")
+        await update.message.reply_text("Formato incorrecto. Usa /ingreso Categoria: Monto")
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subcat, amount = " ".join(context.args).split(":")
-        update_data("Gastos", subcat.strip(), int(amount.strip()))
+        categoria, monto = " ".join(context.args).split(":")
+        append_row("Gastos", categoria.strip(), int(monto.strip()))
         await update.message.reply_text("Gasto registrado.")
     except:
-        await update.message.reply_text("Formato incorrecto. Usa /gasto Subcategoria: Monto")
+        await update.message.reply_text("Formato incorrecto. Usa /gasto Categoria: Monto")
 
 async def reintegro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        categoria, amount = " ".join(context.args).split(":")
-        success, message = update_reintegro(categoria.strip(), int(amount.strip()))
-        await update.message.reply_text(message)
+        categoria, monto = " ".join(context.args).split(":")
+        categoria = categoria.strip()
+        monto = int(monto.strip())
+        if categoria not in REINTEGRO_TOPES:
+            await update.message.reply_text(f"Categoría inválida. Usa una de estas: {', '.join(REINTEGRO_TOPES.keys())}")
+            return
+
+        # Verificar tope mensual
+        sheet = get_sheet()
+        rows = sheet.get_all_records()
+        total_categoria = sum(int(row["Monto"]) for row in rows if row["Tipo"] == "Reintegros" and row["Categoría"] == categoria)
+        if total_categoria + monto > REINTEGRO_TOPES[categoria]:
+            await update.message.reply_text(f"Tope mensual excedido para {categoria}. Máximo permitido: 400000")
+            return
+
+        append_row("Reintegros", categoria, monto)
+        await update.message.reply_text("Reintegro registrado.")
     except:
         await update.message.reply_text("Formato incorrecto. Usa /reintegro Categoria: Monto")
 
 async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load_data()
-    lines = [f"ACTIVO: {data['ACTIVO']}\n"]
-    for cat in ["Ingresos", "Gastos"]:
-        lines.append(f"{cat}:")
-        for subcat, amount in data[cat].items():
-            lines.append(f"  {subcat}: {amount}")
-        lines.append("")
-    lines.append("Reintegros:")
-    for categoria, amount in data["Reintegros"].items():
-        lines.append(f"  {categoria}: {amount}")
-    await update.message.reply_text("\n".join(lines))
+    try:
+        resumen = generar_informe()
+        await update.message.reply_text(resumen)
+    except:
+        await update.message.reply_text("Error al generar el informe.")
 
+# Inicializar el bot
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)
