@@ -3,7 +3,7 @@ import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-DATA_FILE = "data.json"
+DATA_FILE = "/data/data.json"
 REINTEGRO_TOPES = {
     "Supermercado": 400000,
     "Combustible": 400000,
