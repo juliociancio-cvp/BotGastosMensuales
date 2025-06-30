@@ -88,8 +88,52 @@ async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sheet = get_sheet()
         rows = sheet.get_all_records()
+        args = context.args
+        now = datetime.datetime.now()
+        current_month = now.month
+        current_year = now.year
+
+        if args and args[0].lower() == "gastos":
+            resumen = {}
+            total = 0
+            for row in rows:
+                if row["Tipo"] == "Gastos":
+                    cat = row["Categoría"]
+                    monto = int(row["Monto"])
+                    resumen[cat] = resumen.get(cat, 0) + monto
+                    total += monto
+            lines = ["GASTOS:"]
+            for cat, monto in resumen.items():
+                lines.append(f"  {cat}: {monto}")
+            lines.append(f"\nTOTAL GASTOS: {total}")
+            await update.message.reply_text("\n".join(lines))
+            return
+
+        if args and args[0].lower() == "reintegros":
+            resumen = {}
+            for row in rows:
+                fecha_str = row["Fecha"]
+                try:
+                    fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
+                except:
+                    continue
+                if row["Tipo"] == "Reintegros" and fecha.month == current_month and fecha.year == current_year:
+                    cat = row["Categoría"]
+                    monto = int(row["Monto"])
+                    resumen[cat] = resumen.get(cat, 0) + monto
+            lines = ["REINTEGROS DISPONIBLES:"]
+            for cat in REINTEGRO_TOPES:
+                usado = resumen.get(cat, 0)
+                restante = max(REINTEGRO_TOPES[cat] - usado, 0)
+                disponible_para_gastar = int(restante / 0.4) if restante > 0 else 0
+                lines.append(f"  {cat}: {disponible_para_gastar}")
+            await update.message.reply_text("\n".join(lines))
+            return
+
+        # Informe general
         activo = 0
         resumen = {"Ingresos": {}, "Gastos": {}, "Reintegros": {}}
+        totales = {"Ingresos": 0, "Gastos": 0, "Reintegros": 0}
 
         for row in rows:
             tipo = row["Tipo"]
@@ -109,16 +153,18 @@ async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if categoria not in resumen[tipo]:
                 resumen[tipo][categoria] = 0
             resumen[tipo][categoria] += monto
+            totales[tipo] += monto
 
         lines = [f"ACTIVO: {activo}\n"]
         for tipo in ["Ingresos", "Gastos", "Reintegros"]:
             lines.append(f"{tipo}:")
             for cat, monto in resumen[tipo].items():
                 lines.append(f"  {cat}: {monto}")
-            lines.append("")
+            lines.append(f"TOTAL {tipo.upper()}: {totales[tipo]}\n")
         await update.message.reply_text("\n".join(lines))
-    except:
+    except Exception as e:
         await update.message.reply_text("Error al generar el informe.")
+
 
 if __name__ == "__main__":
     import logging
