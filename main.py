@@ -118,15 +118,17 @@ async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except:
                     continue
                 if row["Tipo"] == "Reintegros" and fecha.month == current_month and fecha.year == current_year:
-                    cat = row["Categoría"]
+                    cat = row["Categoría"].strip().capitalize()
                     monto = int(row["Monto"])
                     resumen[cat] = resumen.get(cat, 0) + monto
+        
             lines = ["REINTEGROS DISPONIBLES:"]
             for cat in REINTEGRO_TOPES:
-                usado = resumen.get(cat, 0)
+                cat_upper = cat.upper()
+                usado = resumen.get(cat.capitalize(), 0)
                 restante = max(REINTEGRO_TOPES[cat] - usado, 0)
                 disponible_para_gastar = int(restante / 0.4) if restante > 0 else 0
-                lines.append(f"  {cat}: {disponible_para_gastar}")
+                lines.append(f"  {cat_upper}: {disponible_para_gastar}")
             await update.message.reply_text("\n".join(lines))
             return
 
