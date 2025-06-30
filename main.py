@@ -7,62 +7,48 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # Google Sheets setup
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-CREDENTIALS_FILE = "/etc/secrets/gcp_credentials.json"  # Ruta del archivo secreto en Render
+CREDENTIALS_FILE = "/etc/secrets/gcp_credentials.json"
 SPREADSHEET_NAME = "GastosMensualesJC"
 
-# Categorías válidas para reintegros y su tope
 REINTEGRO_TOPES = {
     "Supermercado": 400000,
     "Combustible": 400000,
     "Tienda": 400000,
     "Bares": 400000,
-    "Pagopar": 400000
+    "Pagopar": 400000,
+    "Monchis": 160000
 }
 
-# Autenticación con Google Sheets
 def get_sheet():
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME).sheet1
     return sheet
 
-# Agregar una fila a la hoja
 def append_row(tipo, categoria, monto):
     sheet = get_sheet()
     fecha = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sheet.append_row([fecha, tipo, categoria, str(monto)])
 
-# Calcular el ACTIVO y totales por categoría
-def generar_informe():
+def calcular_total_reintegro_categoria(categoria):
     sheet = get_sheet()
     rows = sheet.get_all_records()
-    activo = 0
-    resumen = {"Ingresos": {}, "Gastos": {}, "Reintegros": {}}
+    return sum(int(row["Monto"]) for row in rows if row["Tipo"] == "Reintegros" and row["Categoría"] == categoria)
 
-    for row in rows:
-        tipo = row["Tipo"]
-        categoria = row["Categoría"]
-        monto = int(row["Monto"])
-        if tipo == "Ingresos":
-            activo += monto
-        elif tipo == "Gastos":
-            activo -= monto
-        elif tipo == "Reintegros":
-            activo += monto
+def registrar_reintegro_automatico(categoria, monto_solicitado):
+    if categoria not in REINTEGRO_TOPES:
+        return "Categoría no válida para reintegro."
 
-        if categoria not in resumen[tipo]:
-            resumen[tipo][categoria] = 0
-        resumen[tipo][categoria] += monto
+    total_actual = calcular_total_reintegro_categoria(categoria)
+    disponible = REINTEGRO_TOPES[categoria] - total_actual
 
-    lines = [f"ACTIVO: {activo}\n"]
-    for tipo in ["Ingresos", "Gastos", "Reintegros"]:
-        lines.append(f"{tipo}:")
-        for cat, monto in resumen[tipo].items():
-            lines.append(f"  {cat}: {monto}")
-        lines.append("")
-    return "\n".join(lines)
+    if disponible <= 0:
+        return f"Tope mensual alcanzado para {categoria}. No se registró reintegro."
 
-# Comandos del bot
+    monto_reintegro = min(monto_solicitado, disponible)
+    append_row("Reintegros", categoria, monto_reintegro)
+    return f"Reintegro automático registrado: {categoria} - {monto_reintegro}"
+
 async def ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         categoria, monto = " ".join(context.args).split(":")
@@ -74,8 +60,17 @@ async def ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         categoria, monto = " ".join(context.args).split(":")
-        append_row("Gastos", categoria.strip(), int(monto.strip()))
-        await update.message.reply_text("Gasto registrado.")
+        categoria = categoria.strip()
+        monto = int(monto.strip())
+        append_row("Gastos", categoria, monto)
+
+        mensaje = "Gasto registrado."
+        if categoria in REINTEGRO_TOPES:
+            reintegro_40 = int(monto * 0.4)
+            resultado = registrar_reintegro_automatico(categoria, reintegro_40)
+            mensaje += f"\n{resultado}"
+
+        await update.message.reply_text(mensaje)
     except:
         await update.message.reply_text("Formato incorrecto. Usa /gasto Categoria: Monto")
 
@@ -84,31 +79,47 @@ async def reintegro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         categoria, monto = " ".join(context.args).split(":")
         categoria = categoria.strip()
         monto = int(monto.strip())
-        if categoria not in REINTEGRO_TOPES:
-            await update.message.reply_text(f"Categoría inválida. Usa una de estas: {', '.join(REINTEGRO_TOPES.keys())}")
-            return
-
-        # Verificar tope mensual
-        sheet = get_sheet()
-        rows = sheet.get_all_records()
-        total_categoria = sum(int(row["Monto"]) for row in rows if row["Tipo"] == "Reintegros" and row["Categoría"] == categoria)
-        if total_categoria + monto > REINTEGRO_TOPES[categoria]:
-            await update.message.reply_text(f"Tope mensual excedido para {categoria}. Máximo permitido: 400000")
-            return
-
-        append_row("Reintegros", categoria, monto)
-        await update.message.reply_text("Reintegro registrado.")
+        resultado = registrar_reintegro_automatico(categoria, monto)
+        await update.message.reply_text(resultado)
     except:
         await update.message.reply_text("Formato incorrecto. Usa /reintegro Categoria: Monto")
 
 async def informe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        resumen = generar_informe()
-        await update.message.reply_text(resumen)
+        sheet = get_sheet()
+        rows = sheet.get_all_records()
+        activo = 0
+        resumen = {"Ingresos": {}, "Gastos": {}, "Reintegros": {}}
+
+        for row in rows:
+            tipo = row["Tipo"]
+            categoria = row["Categoría"]
+            try:
+                monto = int(row["Monto"])
+            except:
+                continue
+
+            if tipo == "Ingresos":
+                activo += monto
+            elif tipo == "Gastos":
+                activo -= monto
+            elif tipo == "Reintegros":
+                activo += monto
+
+            if categoria not in resumen[tipo]:
+                resumen[tipo][categoria] = 0
+            resumen[tipo][categoria] += monto
+
+        lines = [f"ACTIVO: {activo}\n"]
+        for tipo in ["Ingresos", "Gastos", "Reintegros"]:
+            lines.append(f"{tipo}:")
+            for cat, monto in resumen[tipo].items():
+                lines.append(f"  {cat}: {monto}")
+            lines.append("")
+        await update.message.reply_text("\n".join(lines))
     except:
         await update.message.reply_text("Error al generar el informe.")
 
-# Inicializar el bot
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)
